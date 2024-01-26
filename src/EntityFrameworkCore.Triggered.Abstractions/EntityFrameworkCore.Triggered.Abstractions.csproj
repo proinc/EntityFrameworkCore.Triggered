@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\EntityFrameworkCore.Triggered.Analyzers\EntityFrameworkCore.Triggered.Analyzers\EntityFrameworkCore.Triggered.Analyzers.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" BundledAnalyzer="true" />
     <ProjectReference Include="..\..\EntityFrameworkCore.Triggered.Analyzers\EntityFrameworkCore.Triggered.Analyzers.CodeFixes\EntityFrameworkCore.Triggered.Analyzers.CodeFixes.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" BundledAnalyzer="true" />
   </ItemGroup>
