@@ -12,16 +12,13 @@ env:
   # GitHub Packages Feed settings
   GITHUB_FEED: https://nuget.pkg.github.com/${{ github.repository_owner }}/
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  # Official NuGet Feed settings
-  NUGET_FEED: https://api.nuget.org/v3/index.json
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
-      id-token: write
     steps:
       - uses: actions/checkout@v4
       - name: Setup .NET Core
@@ -42,14 +39,8 @@ jobs:
           do
             dotnet nuget push $f --source $GITHUB_FEED --api-key ${{github.token}} --skip-duplicate --no-symbols
           done
-      - name: NuGet login
-        uses: NuGet/login@v1
-        id: nuget-login
-        with:
-          user: Koenbeuk
-      - name: Push to NuGet Feed
-        run: |
-          for f in ./nupkg/*.nupkg
-          do
-            dotnet nuget push $f --source $NUGET_FEED --skip-duplicate --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
-          done
+      # Attached so consumers can recompute lock file hashes without a packages token.
+      - name: Attach packages to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" ./nupkg/*.nupkg --repo "${GITHUB_REPOSITORY}"
