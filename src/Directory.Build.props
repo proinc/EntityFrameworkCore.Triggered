@@ -3,6 +3,8 @@
   
   <PropertyGroup>
     <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <!-- Our own ID, so upstream releases mirrored onto our feed can't be mistaken for fork releases. -->
+    <PackageId>ProInc.$(MSBuildProjectName)</PackageId>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
