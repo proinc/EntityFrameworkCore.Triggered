@@ -9,16 +9,13 @@ env:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
   # Disable sending usage data to Microsoft
   DOTNET_CLI_TELEMETRY_OPTOUT: true
-  # GitHub Packages Feed settings
-  GITHUB_FEED: https://nuget.pkg.github.com/${{ github.repository_owner }}/
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  FEED: https://packages.proinc.dev/v3/index.json
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
     steps:
       - uses: actions/checkout@v4
       - name: Setup .NET Core
@@ -33,13 +30,13 @@ jobs:
           VERSION="${VERSION:1}"
           echo Clean Version: $VERSION
           dotnet pack -v normal -c Release --include-symbols --include-source -p:PackageVersion=$VERSION -o nupkg EntityFrameworkCore.Triggered.slnx
-      - name: Push to GitHub Feed
+      - name: Push to packages.proinc.dev
         run: |
           for f in ./nupkg/*.nupkg
           do
-            dotnet nuget push $f --source $GITHUB_FEED --api-key ${{github.token}} --skip-duplicate --no-symbols
+            dotnet nuget push $f --source $FEED --api-key ${{ secrets.BAGET_API_KEY }} --skip-duplicate --no-symbols
           done
-      # Attached so consumers can recompute lock file hashes without a packages token.
+      # Attached so the exact packages pushed are on record next to the source.
       - name: Attach packages to release
         env:
           GH_TOKEN: ${{ github.token }}
