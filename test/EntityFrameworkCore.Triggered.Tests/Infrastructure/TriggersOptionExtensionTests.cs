@@ -43,27 +43,21 @@ namespace EntityFrameworkCore.Triggered.Tests.Infrastructure
             }
         }
 
-        static TestDbContext CreateContext(Action<TriggersContextOptionsBuilder> configure)
-            => new(new DbContextOptionsBuilder<TestDbContext>()
+        static DbContextOptions<TContext> CreateOptions<TContext>(Action<TriggersContextOptionsBuilder> configure)
+            where TContext : DbContext
+            => new DbContextOptionsBuilder<TContext>()
                 .UseInMemoryDatabase(nameof(TriggersOptionExtensionTests))
                 // Each test here builds its own service provider, and EF objects once a process has built twenty.
                 .ConfigureWarnings(warnings => warnings.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning))
                 .UseTriggers(configure)
-                .Options);
+                .Options;
+
+        static TestDbContext CreateContext(Action<TriggersContextOptionsBuilder> configure)
+            => new(CreateOptions<TestDbContext>(configure));
 
         // A singleton of EF's internal service provider, so two contexts return the same one only when they share that provider.
         static object ServiceProviderMarker(DbContext context)
             => context.GetService<ITriggerTypeRegistryService>();
-
-        [Fact]
-        public void AddTrigger_TypeThatImplementsNoTriggerType_IsRejected()
-        {
-            using var context = CreateContext(triggerOptions => triggerOptions.AddTrigger(typeof(string), ServiceLifetime.Transient));
-
-            var exception = Assert.Throws<InvalidOperationException>(() => context.SaveChanges());
-
-            Assert.Contains(typeof(string).FullName, exception.Message);
-        }
 
         [Fact]
         public void AddTrigger_InstanceThatImplementsNoTriggerType_IsRejected()
@@ -99,7 +93,8 @@ namespace EntityFrameworkCore.Triggered.Tests.Infrastructure
         public void AddTrigger_TypeThatImplementsNoTriggerType_IsRejectedByEveryContext()
         {
             using var first = CreateContext(triggerOptions => triggerOptions.AddTrigger(typeof(string), ServiceLifetime.Transient));
-            Assert.Throws<InvalidOperationException>(() => first.SaveChanges());
+            var exception = Assert.Throws<InvalidOperationException>(() => first.SaveChanges());
+            Assert.Contains(typeof(string).FullName, exception.Message);
 
             using var second = CreateContext(triggerOptions => triggerOptions.AddTrigger(typeof(string), ServiceLifetime.Transient));
 
@@ -122,11 +117,8 @@ namespace EntityFrameworkCore.Triggered.Tests.Infrastructure
         [Fact]
         public void AddTrigger_WhenOnConfiguringAddsTheTriggerTypeItImplements_IsAccepted()
         {
-            using var context = new ContextThatAddsATriggerTypeInOnConfiguring(new DbContextOptionsBuilder<ContextThatAddsATriggerTypeInOnConfiguring>()
-                .UseInMemoryDatabase(nameof(TriggersOptionExtensionTests))
-                .ConfigureWarnings(warnings => warnings.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning))
-                .UseTriggers(triggerOptions => triggerOptions.AddTrigger<CustomTrigger>())
-                .Options);
+            using var context = new ContextThatAddsATriggerTypeInOnConfiguring(
+                CreateOptions<ContextThatAddsATriggerTypeInOnConfiguring>(triggerOptions => triggerOptions.AddTrigger<CustomTrigger>()));
 
             Assert.Equal(0, context.SaveChanges());
         }

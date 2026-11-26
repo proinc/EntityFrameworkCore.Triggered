@@ -85,7 +85,11 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
                 => HashCode.Combine(Lifetime, IsDiscovery, Source is Type[] types ? types.Length : Source.GetHashCode());
         }
 
-        private sealed record ResolvedTrigger(Type Type, object? Instance, ServiceLifetime Lifetime, Type[] Implementations);
+        private sealed record ResolvedTrigger(Type Type, object? Instance, ServiceLifetime Lifetime, Type[] Implementations)
+        {
+            // Discovery only finds triggers that can, so one that can't was added with AddTrigger.
+            public bool CanRun => Implementations.Length > 0 && !Type.ContainsGenericParameters;
+        }
 
         private static readonly Type[] _defaultTriggerTypes = new[] {
             typeof(IBeforeSaveTrigger<>),
@@ -113,7 +117,6 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
         private Registration[] _registrations = Array.Empty<Registration>();
         private Type[] _triggerTypes = _defaultTriggerTypes;
         private ResolvedTrigger[]? _resolvedTriggers;
-        private bool _triggersAreValid;
         private int _maxCascadeCycles = 100;
         private CascadeBehavior _cascadeBehavior = CascadeBehavior.EntityAndType;
         private Func<IServiceProvider, IServiceProvider>? _serviceProviderTransform;
@@ -157,13 +160,15 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
 
             services.AddScoped<TriggerService>();
             services.AddScoped<IResettableService>(serviceProvider => serviceProvider.GetRequiredService<TriggerService>());
-            // A context asks for the trigger service when it saves, and only from services built for its final
-            // options, so this is where a trigger that can't run is rejected.
-            services.TryAddScoped<ITriggerService>(serviceProvider => {
-                EnsureTriggersAreValid();
+            var triggers = ResolveTriggers();
+            var triggerThatCannotRun = Array.Find(triggers, trigger => !trigger.CanRun);
 
-                return serviceProvider.GetRequiredService<TriggerService>();
-            });
+            // A trigger that can't run is rejected here and not in Validate, which EF calls from the context's
+            // constructor, when OnConfiguring may still add the trigger type the trigger implements. A context asks
+            // for the trigger service when it saves, and only from the services built for its final options.
+            services.TryAddScoped<ITriggerService>(serviceProvider => triggerThatCannotRun is null
+                ? serviceProvider.GetRequiredService<TriggerService>()
+                : throw CreateRejection(triggerThatCannotRun));
 
             services.AddScoped<TriggerFactory>();
 
@@ -183,10 +188,9 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
 
             services.TryAddTransient(typeof(ICascadeStrategy), cascadeStrategyType);
 
-            foreach (var trigger in ResolveTriggers())
+            foreach (var trigger in triggers)
             {
-                // Neither kind can be registered. EnsureTriggersAreValid rejects them when the context saves.
-                if (trigger.Implementations.Length == 0 || trigger.Type.ContainsGenericParameters)
+                if (!trigger.CanRun)
                 {
                     continue;
                 }
@@ -212,43 +216,17 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
             }
         }
 
-        // Triggers aren't checked here. EF calls this from the context's constructor, when OnConfiguring may still
-        // add the trigger type that a trigger implements.
         public void Validate(IDbContextOptions options) { }
 
-        private void EnsureTriggersAreValid()
-        {
-            if (_triggersAreValid)
-            {
-                return;
-            }
-
-            foreach (var registration in _registrations)
-            {
-                // A discovery only contributes classes that are triggers.
-                if (registration.IsDiscovery)
-                {
-                    continue;
-                }
-
-                if (registration.TriggerType.ContainsGenericParameters)
-                {
-                    throw new InvalidOperationException(
-                        $"'{registration.TriggerType}' was added as a trigger but is an open generic type, which can't be created. "
-                        + "Add it with its type arguments, such as typeof(SoftDelete<User>).");
-                }
-
-                if (FindTriggerImplementations(registration.TriggerType).Length == 0)
-                {
-                    throw new InvalidOperationException(
-                        $"'{registration.TriggerType}' was added as a trigger but implements none of the registered trigger types. "
-                        + "A trigger implements an interface such as IBeforeSaveTrigger<TEntity>, or one added with AddTriggerType. "
-                        + "UseTransactionTriggers adds the transaction trigger types.");
-                }
-            }
-
-            _triggersAreValid = true;
-        }
+        private static InvalidOperationException CreateRejection(ResolvedTrigger trigger)
+            => trigger.Type.ContainsGenericParameters
+                ? new InvalidOperationException(
+                    $"'{trigger.Type}' was added as a trigger but is an open generic type, which can't be created. "
+                    + "Add it with its type arguments, such as typeof(SoftDelete<User>).")
+                : new InvalidOperationException(
+                    $"'{trigger.Type}' was added as a trigger but implements none of the registered trigger types. "
+                    + "A trigger implements an interface such as IBeforeSaveTrigger<TEntity>, or one added with AddTriggerType. "
+                    + "UseTransactionTriggers adds the transaction trigger types.");
 
         protected TriggersOptionExtension Clone() => new(this);
 

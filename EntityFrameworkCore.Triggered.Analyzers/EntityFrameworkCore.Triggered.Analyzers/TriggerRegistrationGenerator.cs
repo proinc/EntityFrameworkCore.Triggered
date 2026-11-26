@@ -178,7 +178,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             FullName(type),
             new EquatableArray<string>(saveTriggerInterfaces?.ToImmutable() ?? ImmutableArray<string>.Empty),
             isAccessible,
-            areInterfacesAccessible,
+            isAccessible && areInterfacesAccessible,
             isAccessible && areInterfacesAccessible ? null : type.Locations.FirstOrDefault(location => location.IsInSource) ?? Location.None);
     }
 
@@ -245,7 +245,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             var leftOutOfOptionsBuilder = hasOptionsBuilderMethod && !trigger.IsAccessible;
             var leftOutOfServiceCollection = hasServiceCollectionMethod
                 && trigger.SaveTriggerInterfaces.Count > 0
-                && !(trigger.IsAccessible && trigger.AreInterfacesAccessible);
+                && !trigger.AreInterfacesAccessible;
 
             if (leftOutOfOptionsBuilder || leftOutOfServiceCollection)
             {
@@ -253,7 +253,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
                     DiagnosticDescriptors.EFCT003_InaccessibleTrigger,
                     trigger.Location,
                     trigger.FullName.Substring("global::".Length),
-                    hasOptionsBuilderMethod && !leftOutOfOptionsBuilder ? "the generated service collection registration" : "the generated registration"));
+                    hasOptionsBuilderMethod && trigger.IsAccessible ? "the generated service collection registration" : "the generated registration"));
             }
         }
 
@@ -385,7 +385,8 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
         string FirstParameterName,
         string? LifetimeParameterName);
 
-    // Location is set only when generated code can't reach the class or one of its interfaces, for the diagnostic.
+    // IsAccessible is whether generated code can name the class, and AreInterfacesAccessible whether it can name the
+    // class's trigger interfaces as well. Location is set only when it can't do both, for the diagnostic.
     private sealed record TriggerClass(
         string FullName,
         EquatableArray<string> SaveTriggerInterfaces,
