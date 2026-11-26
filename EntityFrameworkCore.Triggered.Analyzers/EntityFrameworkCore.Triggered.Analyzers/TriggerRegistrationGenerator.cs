@@ -63,12 +63,14 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
         var method = (IMethodSymbol)context.TargetSymbol;
 
         var firstParameterType = method.Parameters.Length > 0 ? FullName(method.Parameters[0].Type) : null;
-        var containingTypeDeclarations = syntax.Ancestors().OfType<TypeDeclarationSyntax>().Reverse().ToList();
+        var containingClass = syntax.Parent as ClassDeclarationSyntax;
 
         var isValid = firstParameterType is OptionsBuilderType or ServiceCollectionType
-            // The implementation goes in another file, in another part of each containing type.
-            && containingTypeDeclarations.All(type => type.Modifiers.Any(SyntaxKind.PartialKeyword))
-            && !ContainingTypes(method.ContainingType).Any(type => type.IsFileLocal)
+            // The implementation goes in another part of the class, in another file. Only a top-level, non-generic
+            // class is accepted: an extension method needs one anyway, and the other part is then just its name.
+            && containingClass is { Parent: BaseNamespaceDeclarationSyntax or CompilationUnitSyntax, TypeParameterList: null }
+            && containingClass.Modifiers.Any(SyntaxKind.PartialKeyword)
+            && !method.ContainingType.IsFileLocal
             && method.IsStatic
             && method.IsPartialDefinition
             && method.PartialImplementationPart is null
@@ -89,25 +91,10 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             return new RegistrationMethod(name, Signature: null, syntax.Identifier.GetLocation());
         }
 
-        var containingTypes = containingTypeDeclarations
-            .Select(type => {
-                var keyword = type is RecordDeclarationSyntax record
-                    ? $"{record.Keyword.Text} {record.ClassOrStructKeyword.Text}".TrimEnd()
-                    : type.Keyword.Text;
-
-                // Names and variance only. An attribute on a type parameter can't be repeated on another part.
-                var typeParameters = type.TypeParameterList is { } list
-                    ? $"<{string.Join(", ", list.Parameters.Select(parameter => $"{parameter.VarianceKeyword.Text} {parameter.Identifier.Text}".TrimStart()))}>"
-                    : "";
-
-                return $"partial {keyword} {type.Identifier.Text}{typeParameters}";
-            })
-            .ToImmutableArray();
-
         var signature = new MethodSignature(
             FullName(method.ContainingType),
             method.ContainingNamespace.IsGlobalNamespace ? null : method.ContainingNamespace.ToDisplayString(NamespaceFormat),
-            new EquatableArray<string>(containingTypes),
+            containingClass!.Identifier.Text,
             string.Join(" ", syntax.Modifiers.Select(modifier => modifier.Text)),
             firstParameterType!,
             method.ReturnsVoid,
@@ -282,19 +269,19 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
         // Naming a trigger marked obsolete or experimental is reported in this file, where its author can't suppress it.
         source.AppendLine("#pragma warning disable");
 
-        // Methods that share a containing type share one declaration of it, and one candidate list.
+        // Methods that share a class share one declaration of it, and one candidate list.
         foreach (var group in validMethods.GroupBy(method => method.Signature.ContainingType))
         {
             source.AppendLine();
-            AppendContainingType(source, group.ToList(), accessibleTriggers);
+            AppendClass(source, group.ToList(), accessibleTriggers);
         }
 
         context.AddSource("TriggerRegistration.g.cs", SourceText.From(source.ToString(), Encoding.UTF8));
     }
 
-    private static void AppendContainingType(StringBuilder source, List<(string Name, MethodSignature Signature)> methods, List<TriggerClass> triggers)
+    private static void AppendClass(StringBuilder source, List<(string Name, MethodSignature Signature)> methods, List<TriggerClass> triggers)
     {
-        var (@namespace, containingTypes) = (methods[0].Signature.Namespace, methods[0].Signature.ContainingTypes);
+        var (@namespace, className) = (methods[0].Signature.Namespace, methods[0].Signature.ClassName);
         var depth = 0;
 
         void Line(string text) => source.Append(' ', depth * 4).AppendLine(text);
@@ -317,10 +304,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             Open($"namespace {@namespace}");
         }
 
-        foreach (var containingType in containingTypes)
-        {
-            Open(containingType);
-        }
+        Open($"partial class {className}");
 
         if (methods.Any(method => method.Signature.FirstParameterType == OptionsBuilderType))
         {
@@ -394,7 +378,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
     private sealed record MethodSignature(
         string ContainingType,
         string? Namespace,
-        EquatableArray<string> ContainingTypes,
+        string ClassName,
         string Modifiers,
         string FirstParameterType,
         bool ReturnsVoid,

@@ -119,7 +119,7 @@ services.AddDbContext<ApplicationContext>(options => options.UseTriggers(trigger
 services.AddAssemblyTriggers();
 ```
 
-`AddAssemblyTriggers` reads the assembly with reflection when the application starts. To have the list written at compile time instead, declare a partial method and mark it with `[GeneratedTriggerRegistration]`. A source generator that ships with the package implements it:
+`AddAssemblyTriggers` reads the assembly with reflection when the application starts. To have the list written at compile time instead, declare a partial method in a top-level partial class and mark it with `[GeneratedTriggerRegistration]`. A source generator that ships with the package implements it:
 
 ```csharp
 public static partial class TriggerRegistration

@@ -7,7 +7,8 @@ namespace EntityFrameworkCore.Triggered
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The method is static and partial. It takes a <c>TriggersContextOptionsBuilder</c> or an <c>IServiceCollection</c>,
+    /// The method is static and partial, in a top-level, non-generic partial class. It takes a
+    /// <c>TriggersContextOptionsBuilder</c> or an <c>IServiceCollection</c>,
     /// optionally followed by a <c>ServiceLifetime</c>, and returns its first parameter or nothing. Triggers are
     /// scoped when the method takes no lifetime.
     /// </para>

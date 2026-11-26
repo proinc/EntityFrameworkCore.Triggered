@@ -198,15 +198,12 @@ public static partial class Registration
         var registration = Compile(Triggers + @"
 namespace App
 {
-    public partial class Host
+    internal static partial class Registration
     {
-        internal static partial class Inner
-        {
-            [GeneratedTriggerRegistration]
-            internal static partial void Register(TriggersContextOptionsBuilder builder, ServiceLifetime lifetime);
-        }
+        [GeneratedTriggerRegistration]
+        internal static partial void Register(TriggersContextOptionsBuilder builder, ServiceLifetime lifetime);
     }
-}", "App.Host+Inner", "Register");
+}", "App.Registration", "Register");
 
         var triggers = RegisteredTriggers(registration, lifetime: ServiceLifetime.Singleton);
 
@@ -268,18 +265,17 @@ public static class Registration
         Assert.Equal("EFCT002", diagnostic.Id);
     }
 
-    [Fact]
-    public void MethodInATypeThatIsNotPartial_IsReported()
+    [Theory]
+    [InlineData("public partial class Startup { static partial class Registration {", "} }")]
+    [InlineData("public static partial class Registration<T> {", "}")]
+    [InlineData("public partial record Registration {", "}")]
+    [InlineData("public partial struct Registration {", "}")]
+    public void MethodOutsideATopLevelNonGenericClass_IsReported(string open, string close)
     {
-        var (_, diagnostics) = Generate(Triggers + @"
-public class Startup
-{
-    static partial class Registration
-    {
-        [GeneratedTriggerRegistration]
-        internal static partial void Register(TriggersContextOptionsBuilder builder);
-    }
-}");
+        var (_, diagnostics) = Generate(Triggers + open + @"
+    [GeneratedTriggerRegistration]
+    internal static partial void Register(TriggersContextOptionsBuilder builder);
+" + close);
 
         var diagnostic = Assert.Single(diagnostics);
         Assert.Equal("EFCT002", diagnostic.Id);
@@ -369,16 +365,13 @@ public class Gone
     public void MethodsInPartsOfOneType_ShareItsCandidateList()
     {
         var (output, diagnostics) = Generate(Triggers + @"
-[System.AttributeUsage(System.AttributeTargets.GenericParameter)]
-public class MarkAttribute : System.Attribute { }
-
-public static partial class Registration<[Mark] T, U>
+public static partial class Registration
 {
     [GeneratedTriggerRegistration]
     public static partial void First(TriggersContextOptionsBuilder builder);
 }
 
-public static partial class Registration<T,U>
+public static partial class Registration
 {
     [GeneratedTriggerRegistration]
     public static partial void Second(TriggersContextOptionsBuilder builder);

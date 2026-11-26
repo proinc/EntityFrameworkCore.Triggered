@@ -16,7 +16,7 @@ internal static class DiagnosticDescriptors
     public static readonly DiagnosticDescriptor EFCT002_InvalidRegistrationMethod = new(
         id: "EFCT002",
         title: "Method can't be generated as a trigger registration",
-        messageFormat: "{0} must be a static, non-generic partial method without a body, in a partial type. It takes a TriggersContextOptionsBuilder or an IServiceCollection, not nullable and by value, optionally followed by a ServiceLifetime, and returns its first parameter or void.",
+        messageFormat: "{0} must be a static, non-generic partial method without a body, declared directly in a top-level, non-generic partial class. It takes a TriggersContextOptionsBuilder or an IServiceCollection, not nullable and by value, optionally followed by a ServiceLifetime, and returns its first parameter or void.",
         category: "Usage",
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
