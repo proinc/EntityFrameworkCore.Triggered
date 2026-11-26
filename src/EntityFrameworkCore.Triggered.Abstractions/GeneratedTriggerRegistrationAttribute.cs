@@ -3,7 +3,7 @@ using System;
 namespace EntityFrameworkCore.Triggered
 {
     /// <summary>
-    /// Marks a partial method that the source generator implements to register every trigger class in the assembly.
+    /// Marks a partial method that the source generator implements to register every trigger class in the project.
     /// </summary>
     /// <remarks>
     /// <para>
