@@ -12,4 +12,20 @@ internal static class DiagnosticDescriptors
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true,
         description: "The trigger interface was split into sync and async variants. Methods returning Task with a CancellationToken parameter should use the async interface variant, or be converted to the new sync signature.");
+
+    public static readonly DiagnosticDescriptor EFCT002_InvalidRegistrationMethod = new(
+        id: "EFCT002",
+        title: "Method can't be generated as a trigger registration",
+        messageFormat: "'{0}' must be a static, non-generic partial method in a partial type. It takes a TriggersContextOptionsBuilder or an IServiceCollection, not nullable and by value, optionally followed by a ServiceLifetime, and returns its first parameter or void.",
+        category: "Usage",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor EFCT003_InaccessibleTrigger = new(
+        id: "EFCT003",
+        title: "Trigger is left out of the generated registration",
+        messageFormat: "Trigger '{0}' is left out of the generated registration because generated code can't reach it. Make it internal or public, or register it yourself.",
+        category: "Usage",
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
 }
