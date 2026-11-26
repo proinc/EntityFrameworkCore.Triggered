@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Linq;
 using System.Reflection;
 using EntityFrameworkCore.Triggered.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,14 +23,9 @@ namespace Microsoft.EntityFrameworkCore
                 throw new ArgumentNullException(nameof(assemblies));
             }
 
-            var assemblyTypes = assemblies
-                .SelectMany(x => x.GetTypes())
-                .Where(x => x.IsClass)
-                .Where(x => !x.IsAbstract);
-
-            foreach (var assemblyType in assemblyTypes)
+            foreach (var assembly in assemblies)
             {
-                builder.AddTrigger(assemblyType, lifetime);
+                builder.AddTriggersFromAssembly(assembly, lifetime);
             }
 
             return builder;
