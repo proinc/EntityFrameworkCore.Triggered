@@ -74,6 +74,25 @@ namespace EntityFrameworkCore.Triggered.Tests.Infrastructure
         }
 
         [Fact]
+        public void AddTrigger_OpenGenericType_IsRejected()
+        {
+            var exception = Assert.Throws<InvalidOperationException>(
+                () => CreateContext(triggerOptions => triggerOptions.AddTrigger(typeof(TriggerStub<>), ServiceLifetime.Transient)));
+
+            Assert.Contains("open generic", exception.Message);
+        }
+
+        [Fact]
+        public void AddTriggersFromAssembly_SkipsOpenGenericTriggerClasses()
+        {
+            // This assembly holds TriggerStub<TEntity>, a concrete trigger class that can't be created until it's closed.
+            using var context = CreateContext(triggerOptions => triggerOptions
+                .AddTriggersFromAssembly(typeof(TriggersOptionExtensionTests).Assembly, ServiceLifetime.Scoped));
+
+            Assert.NotNull(context.Model);
+        }
+
+        [Fact]
         public void AddTrigger_BeforeTheTriggerTypeItImplements_IsAccepted()
         {
             using var context = CreateContext(triggerOptions => triggerOptions

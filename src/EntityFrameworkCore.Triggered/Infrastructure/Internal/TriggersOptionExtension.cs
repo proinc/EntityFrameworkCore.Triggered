@@ -217,7 +217,19 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
 
             foreach (var registration in _registrations)
             {
-                if (!registration.IsDiscovery && FindTriggerImplementations(registration.TriggerType).Length == 0)
+                if (registration.IsDiscovery)
+                {
+                    continue;
+                }
+
+                if (registration.TriggerType.ContainsGenericParameters)
+                {
+                    throw new InvalidOperationException(
+                        $"'{registration.TriggerType}' was added as a trigger but is an open generic type, which can't be created. "
+                        + "Add it with its type arguments, such as typeof(SoftDelete<User>).");
+                }
+
+                if (FindTriggerImplementations(registration.TriggerType).Length == 0)
                 {
                     throw new InvalidOperationException(
                         $"'{registration.TriggerType}' was added as a trigger but implements none of the registered trigger types. "
@@ -246,7 +258,11 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
                 {
                     foreach (var type in registration.GetDiscoveredTypes())
                     {
-                        if (type.IsClass && !type.IsAbstract && FindTriggerImplementations(type) is { Length: > 0 } implementations)
+                        // An open generic class can't be created, so it isn't a trigger until someone closes it.
+                        if (type.IsClass
+                            && !type.IsAbstract
+                            && !type.ContainsGenericParameters
+                            && FindTriggerImplementations(type) is { Length: > 0 } implementations)
                         {
                             triggers.Add(new ResolvedTrigger(type, null, registration.Lifetime, implementations));
                         }
@@ -379,6 +395,11 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
             if (candidates == null)
             {
                 throw new ArgumentNullException(nameof(candidates));
+            }
+
+            if (Array.IndexOf(candidates, null) >= 0)
+            {
+                throw new ArgumentException("The candidates can't include null.", nameof(candidates));
             }
 
             return WithAdditionalRegistration(new Registration(candidates, lifetime, IsDiscovery: true));

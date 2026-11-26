@@ -46,6 +46,11 @@ namespace App.Triggers
     public class Generic<TEntity> : IBeforeSaveTrigger<TEntity> where TEntity : class
     {
         public void BeforeSave(ITriggerContext<TEntity> context) { }
+
+        public class NestedInGeneric : IBeforeSaveTrigger<Entity>
+        {
+            public void BeforeSave(ITriggerContext<Entity> context) { }
+        }
     }
 
     public struct StructTrigger : IBeforeSaveTrigger<Entity>
@@ -70,7 +75,6 @@ namespace App.Triggers
 }
 ";
 
-    // Everything the test process can load, which includes the library the sources compile against.
     private const string OptionsBuilderRegistration = Triggers + @"
 public static partial class Registration
 {
@@ -78,6 +82,19 @@ public static partial class Registration
     public static partial TriggersContextOptionsBuilder AddAppTriggers(this TriggersContextOptionsBuilder builder);
 }";
 
+    private const string TriggerOnAPrivateEntity = @"
+public class Container
+{
+    private class Row { }
+
+    internal class RowTrigger : IBeforeSaveTrigger<Row>
+    {
+        void IBeforeSaveTrigger<Row>.BeforeSave(ITriggerContext<Row> context) { }
+    }
+}
+";
+
+    // Everything the test process can load, which includes the library the sources compile against.
     private static readonly MetadataReference[] References = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))
         .Split(Path.PathSeparator)
         .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
@@ -160,6 +177,19 @@ public static partial class Registration
 
         Assert.Contains("App.Triggers.Alpha", triggers);
         Assert.DoesNotContain("App.Triggers.Commit", triggers);
+    }
+
+    [Fact]
+    public void LifetimeParameterWithADefault_Compiles()
+    {
+        var registration = Compile(Triggers + @"
+public static partial class Registration
+{
+    [GeneratedTriggerRegistration]
+    public static partial TriggersContextOptionsBuilder AddAppTriggers(this TriggersContextOptionsBuilder builder, ServiceLifetime lifetime = ServiceLifetime.Transient);
+}", "Registration", "AddAppTriggers");
+
+        Assert.NotEmpty(RegisteredTriggers(registration, lifetime: ServiceLifetime.Transient));
     }
 
     [Fact]
@@ -273,17 +303,7 @@ public static partial class Registration
     [Fact]
     public void TriggerOnAnEntityGeneratedCodeCannotReach_IsReportedAndLeftOut()
     {
-        var (output, diagnostics) = Generate(Triggers + @"
-public class Container
-{
-    private class Row { }
-
-    internal class RowTrigger : IBeforeSaveTrigger<Row>
-    {
-        void IBeforeSaveTrigger<Row>.BeforeSave(ITriggerContext<Row> context) { }
-    }
-}
-
+        var (output, diagnostics) = Generate(Triggers + TriggerOnAPrivateEntity + @"
 public static partial class Registration
 {
     [GeneratedTriggerRegistration]
@@ -324,6 +344,15 @@ public static partial class Registration<T,U>
 
         Assert.Empty(diagnostics);
         Assert.Empty(output.GetDiagnostics().Where(x => x.Severity == DiagnosticSeverity.Error));
+    }
+
+    // Only a service collection method writes the entity type into generated code.
+    [Fact]
+    public void OnOptionsBuilder_TriggerOnAnEntityGeneratedCodeCannotReach_IsRegistered()
+    {
+        var registration = Compile(OptionsBuilderRegistration + TriggerOnAPrivateEntity, "Registration", "AddAppTriggers");
+
+        Assert.Contains("Container+RowTrigger", RegisteredTriggers(registration).Select(trigger => trigger.Type));
     }
 
     [Fact]
