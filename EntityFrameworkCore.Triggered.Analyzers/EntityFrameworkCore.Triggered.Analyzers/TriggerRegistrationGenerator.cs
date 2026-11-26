@@ -39,8 +39,8 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             .Collect();
 
         // The package's analyzers reach every project that references it, so a project that marks no method
-        // shouldn't pay for looking through its classes. One that does pays on each compilation either way: a
-        // syntax provider reruns its transform for every class too, and measured no faster.
+        // shouldn't pay for looking through its classes. One that does pays on each compilation either way,
+        // because a syntax provider reruns its transform for every class too. It measured no faster.
         var triggers = methods
             .Combine(context.CompilationProvider)
             .Select(static (source, cancellationToken) => source.Left.Any(method => method.Signature is not null)
@@ -67,7 +67,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
 
         var isValid = firstParameterType is OptionsBuilderType or ServiceCollectionType
             // The implementation goes in another part of the class, in another file. Only a top-level, non-generic
-            // class is accepted: an extension method needs one anyway, and the other part is then just its name.
+            // class is accepted, since an extension method needs one anyway and the other part is then just its name.
             && containingClass is { Parent: BaseNamespaceDeclarationSyntax or CompilationUnitSyntax, TypeParameterList: null }
             && containingClass.Modifiers.Any(SyntaxKind.PartialKeyword)
             && !method.ContainingType.IsFileLocal
@@ -135,7 +135,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
 
     private static TriggerClass? ReadTrigger(INamedTypeSymbol type, Compilation compilation)
     {
-        // Generic classes are left out: the runtime scan can't register an open generic type either.
+        // Generic classes are left out, as the runtime scan leaves out open generic types.
         if (type is not { TypeKind: TypeKind.Class, IsAbstract: false, IsGenericType: false })
         {
             return null;
@@ -191,8 +191,8 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             && attribute.ConstructorArguments.Length == 2
             && attribute.ConstructorArguments[1].Value is true);
 
-    // Whether generated code can name the type. Reflection finds types that code can't: ones that are private,
-    // local to a file, internal to another assembly, or an error to use.
+    // Whether generated code can name the type. Reflection finds types that code can't name, such as ones that
+    // are private, local to a file, internal to another assembly, or an error to use.
     private static bool CanName(ITypeSymbol type, Compilation compilation)
     {
         if (type is IArrayTypeSymbol array)

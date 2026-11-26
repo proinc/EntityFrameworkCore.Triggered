@@ -8,9 +8,9 @@ namespace EntityFrameworkCore.Triggered
     /// <remarks>
     /// <para>
     /// The method is static and partial, in a top-level, non-generic partial class. It takes a
-    /// <c>TriggersContextOptionsBuilder</c> or an <c>IServiceCollection</c>,
-    /// optionally followed by a <c>ServiceLifetime</c>, and returns its first parameter or nothing. Triggers are
-    /// scoped when the method takes no lifetime.
+    /// <c>TriggersContextOptionsBuilder</c> or an <c>IServiceCollection</c>, optionally followed by a
+    /// <c>ServiceLifetime</c>, and returns its first parameter or nothing. Triggers are scoped when the method
+    /// takes no lifetime.
     /// </para>
     /// <para>
     /// A trigger class is a concrete, non-generic class that implements one of the library's trigger interfaces.
