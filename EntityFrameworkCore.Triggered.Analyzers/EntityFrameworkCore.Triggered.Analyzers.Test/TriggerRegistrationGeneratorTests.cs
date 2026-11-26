@@ -100,12 +100,12 @@ public class Container
         .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
         .ToArray();
 
-    private static (Compilation Output, ImmutableArray<Diagnostic> Diagnostics) Generate(string source)
+    private static (Compilation Output, ImmutableArray<Diagnostic> Diagnostics) Generate(string source, params MetadataReference[] references)
     {
         var compilation = CSharpCompilation.Create(
             $"Generated{Guid.NewGuid():N}",
             new[] { CSharpSyntaxTree.ParseText(source) },
-            References,
+            References.Concat(references),
             // MSBuild turns the assembly version unification warnings off for every project too.
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithSpecificDiagnosticOptions(new Dictionary<string, ReportDiagnostic> {
                 ["CS1701"] = ReportDiagnostic.Suppress,
@@ -234,6 +234,41 @@ public static partial class Registration
     }
 
     [Fact]
+    public void MethodThatIsAlreadyImplemented_IsReported()
+    {
+        var (_, diagnostics) = Generate(Triggers + @"
+public static partial class Registration
+{
+    [GeneratedTriggerRegistration]
+    public static partial void Register(TriggersContextOptionsBuilder builder);
+
+    public static partial void Register(TriggersContextOptionsBuilder builder) { }
+}");
+
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Equal("EFCT002", diagnostic.Id);
+    }
+
+    [Fact]
+    public void LocalFunction_IsReported()
+    {
+        var (_, diagnostics) = Generate(Triggers + @"
+public static class Registration
+{
+    public static void Configure(TriggersContextOptionsBuilder options)
+    {
+        Register(options);
+
+        [GeneratedTriggerRegistration]
+        static void Register(TriggersContextOptionsBuilder builder) { }
+    }
+}");
+
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Equal("EFCT002", diagnostic.Id);
+    }
+
+    [Fact]
     public void MethodInATypeThatIsNotPartial_IsReported()
     {
         var (_, diagnostics) = Generate(Triggers + @"
@@ -357,6 +392,37 @@ public static partial class Registration<T,U>
         var registration = Compile(OptionsBuilderRegistration + TriggerOnAPrivateEntity, "Registration", "AddAppTriggers");
 
         Assert.Contains("Container+RowTrigger", RegisteredTriggers(registration).Select(trigger => trigger.Type));
+    }
+
+    [Fact]
+    public void TriggerOnAnEntityInternalToAnotherAssembly_IsReportedAndLeftOut()
+    {
+        var library = CSharpCompilation.Create(
+            "Library",
+            new[] {
+                CSharpSyntaxTree.ParseText(@"
+using EntityFrameworkCore.Triggered;
+
+internal class Row { }
+
+public class RowTriggerBase : IBeforeSaveTrigger<Row>
+{
+    void IBeforeSaveTrigger<Row>.BeforeSave(ITriggerContext<Row> context) { }
+}")
+            },
+            References,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var (output, diagnostics) = Generate(Triggers + @"
+public class RowTrigger : RowTriggerBase { }
+
+public static partial class Registration
+{
+    [GeneratedTriggerRegistration]
+    public static partial void Register(IServiceCollection services);
+}", library.ToMetadataReference());
+
+        AssertReportedAndLeftOut(output, diagnostics, "RowTrigger");
     }
 
     [Fact]

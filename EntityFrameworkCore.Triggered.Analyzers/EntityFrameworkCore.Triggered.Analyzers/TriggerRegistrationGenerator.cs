@@ -34,7 +34,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
         var methods = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 AttributeMetadataName,
-                static (node, _) => node is MethodDeclarationSyntax,
+                static (_, _) => true,
                 static (attributeContext, _) => ReadMethod(attributeContext))
             .Collect();
 
@@ -43,7 +43,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
         var triggers = methods
             .Combine(context.CompilationProvider)
             .Select(static (source, cancellationToken) => source.Left.Any(method => method.Signature is not null)
-                ? FindTriggers(source.Right.Assembly.GlobalNamespace, cancellationToken)
+                ? FindTriggers(source.Right, cancellationToken)
                 : default);
 
         context.RegisterSourceOutput(methods.Combine(triggers), static (output, source) => Generate(output, source.Left, source.Right));
@@ -51,7 +51,14 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
 
     private static RegistrationMethod ReadMethod(GeneratorAttributeSyntaxContext context)
     {
-        var syntax = (MethodDeclarationSyntax)context.TargetNode;
+        // The attribute can also sit on a local function or an accessor, neither of which can be partial.
+        if (context.TargetNode is not MethodDeclarationSyntax syntax)
+        {
+            var identifier = (context.TargetNode as LocalFunctionStatementSyntax)?.Identifier.GetLocation();
+
+            return new RegistrationMethod(context.TargetSymbol.Name, Signature: null, identifier ?? context.TargetNode.GetLocation());
+        }
+
         var method = (IMethodSymbol)context.TargetSymbol;
 
         var firstParameterType = method.Parameters.Length > 0 ? FullName(method.Parameters[0].Type) : null;
@@ -63,6 +70,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             && !ContainingTypes(method.ContainingType).Any(type => type.IsFileLocal)
             && method.IsStatic
             && method.IsPartialDefinition
+            && method.PartialImplementationPart is null
             && !method.IsGenericMethod
             && method.Parameters.All(parameter => parameter.RefKind == RefKind.None)
             && (method.Parameters.Length == 1 || (method.Parameters.Length == 2 && FullName(method.Parameters[1].Type) == ServiceLifetimeType))
@@ -104,7 +112,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
         return new RegistrationMethod(name, signature, Location: null);
     }
 
-    private static EquatableArray<TriggerClass> FindTriggers(INamespaceSymbol globalNamespace, CancellationToken cancellationToken)
+    private static EquatableArray<TriggerClass> FindTriggers(Compilation compilation, CancellationToken cancellationToken)
     {
         var triggers = ImmutableArray.CreateBuilder<TriggerClass>();
 
@@ -117,7 +125,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
 
             foreach (var member in members)
             {
-                if (member is INamedTypeSymbol type && ReadTrigger(type) is { } trigger)
+                if (member is INamedTypeSymbol type && ReadTrigger(type, compilation) is { } trigger)
                 {
                     triggers.Add(trigger);
                 }
@@ -126,13 +134,13 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             }
         }
 
-        Visit(globalNamespace);
+        Visit(compilation.Assembly.GlobalNamespace);
         triggers.Sort(static (left, right) => string.CompareOrdinal(left.FullName, right.FullName));
 
         return new EquatableArray<TriggerClass>(triggers.ToImmutable());
     }
 
-    private static TriggerClass? ReadTrigger(INamedTypeSymbol type)
+    private static TriggerClass? ReadTrigger(INamedTypeSymbol type, Compilation compilation)
     {
         // Generic classes are left out: the runtime scan can't register an open generic type either.
         if (type is not { TypeKind: TypeKind.Class, IsAbstract: false, IsGenericType: false })
@@ -158,7 +166,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
                 (saveTriggerInterfaces ??= ImmutableArray.CreateBuilder<string>()).Add(FullName(@interface));
 
                 // A service collection registers the interface itself, entity type included.
-                areInterfacesAccessible &= IsAccessible(@interface);
+                areInterfacesAccessible &= CanName(@interface, compilation);
             }
             else if (TriggerMapping.TransactionTriggerInterfaces.Contains(name))
             {
@@ -171,8 +179,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             return null;
         }
 
-        // Code can't name a class whose use is an error, though reflection can still find it.
-        var isAccessible = IsAccessible(type) && !ContainingTypes(type).Any(IsObsoleteError);
+        var isAccessible = CanName(type, compilation);
 
         return new TriggerClass(
             FullName(type),
@@ -199,24 +206,25 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             && attribute.ConstructorArguments.Length == 2
             && attribute.ConstructorArguments[1].Value is true);
 
-    // Whether generated code can name the type. It sits in the same assembly, so internal is enough at every
-    // level of nesting.
-    private static bool IsAccessible(ITypeSymbol type)
+    // Whether generated code can name the type. Reflection finds types that code can't: ones that are private,
+    // local to a file, internal to another assembly, or an error to use.
+    private static bool CanName(ITypeSymbol type, Compilation compilation)
     {
         if (type is IArrayTypeSymbol array)
         {
-            return IsAccessible(array.ElementType);
+            return CanName(array.ElementType, compilation);
         }
 
-        if (type is not INamedTypeSymbol named)
+        if (type is not INamedTypeSymbol { TypeKind: not TypeKind.Error } named)
         {
             return true;
         }
 
-        return ContainingTypes(named).All(current =>
-            !current.IsFileLocal
-            && current.DeclaredAccessibility is Accessibility.Public or Accessibility.Internal or Accessibility.ProtectedOrInternal
-            && current.TypeArguments.All(IsAccessible));
+        return compilation.IsSymbolAccessibleWithin(named, compilation.Assembly)
+            && ContainingTypes(named).All(current =>
+                !current.IsFileLocal
+                && !IsObsoleteError(current)
+                && current.TypeArguments.All(argument => CanName(argument, compilation)));
     }
 
     private static void Generate(SourceProductionContext context, ImmutableArray<RegistrationMethod> methods, EquatableArray<TriggerClass> triggers)
@@ -261,7 +269,6 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
 
         var source = new StringBuilder();
         source.AppendLine("// <auto-generated/>");
-        source.AppendLine("#nullable enable");
         // Naming a trigger marked obsolete or experimental is reported in this file, where its author can't suppress it.
         source.AppendLine("#pragma warning disable");
 
@@ -364,7 +371,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
 
             foreach (var @interface in trigger.SaveTriggerInterfaces)
             {
-                line($"{DescriptorExtensionsType}.Add({services}, new {ServiceDescriptorType}(typeof({@interface}), static serviceProvider => global::Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService(serviceProvider, typeof({trigger.FullName})), {ServiceLifetimeType}.Transient));");
+                line($"{DescriptorExtensionsType}.Add({services}, new {ServiceDescriptorType}(typeof({@interface}), serviceProvider => global::Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService(serviceProvider, typeof({trigger.FullName})), {ServiceLifetimeType}.Transient));");
             }
         }
     }
