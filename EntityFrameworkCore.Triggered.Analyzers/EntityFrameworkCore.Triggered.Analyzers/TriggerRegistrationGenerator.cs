@@ -60,13 +60,14 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
         var isValid = firstParameterType is OptionsBuilderType or ServiceCollectionType
             // The implementation goes in another file, in another part of each containing type.
             && containingTypeDeclarations.All(type => type.Modifiers.Any(SyntaxKind.PartialKeyword))
-            && !method.ContainingType.IsFileLocal
+            && !ContainingTypes(method.ContainingType).Any(type => type.IsFileLocal)
             && method.IsStatic
             && method.IsPartialDefinition
             && !method.IsGenericMethod
             && method.Parameters.All(parameter => parameter.RefKind == RefKind.None)
             && (method.Parameters.Length == 1 || (method.Parameters.Length == 2 && FullName(method.Parameters[1].Type) == ServiceLifetimeType))
             && (method.ReturnsVoid || FullName(method.ReturnType) == firstParameterType)
+            && method.RefKind == RefKind.None
             // The implementation is written without annotations, and the compiler wants the two parts to agree.
             && method.Parameters[0].NullableAnnotation != NullableAnnotation.Annotated
             && method.ReturnNullableAnnotation != NullableAnnotation.Annotated;
@@ -171,10 +172,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
         }
 
         // Code can't name a class whose use is an error, though reflection can still find it.
-        var isAccessible = IsAccessible(type) && !type.GetAttributes().Any(attribute =>
-            attribute.AttributeClass?.ToDisplayString() == "System.ObsoleteAttribute"
-            && attribute.ConstructorArguments.Length == 2
-            && attribute.ConstructorArguments[1].Value is true);
+        var isAccessible = IsAccessible(type) && !ContainingTypes(type).Any(IsObsoleteError);
 
         return new TriggerClass(
             FullName(type),
@@ -185,6 +183,21 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
     }
 
     private static string FullName(ITypeSymbol type) => type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+    // The type itself, then each type it's nested in.
+    private static IEnumerable<INamedTypeSymbol> ContainingTypes(INamedTypeSymbol type)
+    {
+        for (INamedTypeSymbol? current = type; current is not null; current = current.ContainingType)
+        {
+            yield return current;
+        }
+    }
+
+    private static bool IsObsoleteError(INamedTypeSymbol type)
+        => type.GetAttributes().Any(attribute =>
+            attribute.AttributeClass?.ToDisplayString() == "System.ObsoleteAttribute"
+            && attribute.ConstructorArguments.Length == 2
+            && attribute.ConstructorArguments[1].Value is true);
 
     // Whether generated code can name the type. It sits in the same assembly, so internal is enough at every
     // level of nesting.
@@ -200,17 +213,10 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             return true;
         }
 
-        for (INamedTypeSymbol? current = named; current is not null; current = current.ContainingType)
-        {
-            if (current.IsFileLocal
-                || current.DeclaredAccessibility is not (Accessibility.Public or Accessibility.Internal or Accessibility.ProtectedOrInternal)
-                || !current.TypeArguments.All(IsAccessible))
-            {
-                return false;
-            }
-        }
-
-        return true;
+        return ContainingTypes(named).All(current =>
+            !current.IsFileLocal
+            && current.DeclaredAccessibility is Accessibility.Public or Accessibility.Internal or Accessibility.ProtectedOrInternal
+            && current.TypeArguments.All(IsAccessible));
     }
 
     private static void Generate(SourceProductionContext context, ImmutableArray<RegistrationMethod> methods, EquatableArray<TriggerClass> triggers)
@@ -229,18 +235,25 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             return;
         }
 
-        // Only a service collection method names the trigger interfaces, so only then does it matter whether
-        // generated code can reach them.
-        var namesInterfaces = validMethods.Any(method => method.Signature.FirstParameterType == ServiceCollectionType);
+        var hasOptionsBuilderMethod = validMethods.Any(method => method.Signature.FirstParameterType == OptionsBuilderType);
+        var hasServiceCollectionMethod = validMethods.Any(method => method.Signature.FirstParameterType == ServiceCollectionType);
 
         foreach (var trigger in triggers)
         {
-            if (!trigger.IsAccessible || (namesInterfaces && !trigger.AreInterfacesAccessible))
+            // An options builder method names the class. A service collection method names its save trigger
+            // interfaces too, and has nothing to register for a class without any.
+            var leftOutOfOptionsBuilder = hasOptionsBuilderMethod && !trigger.IsAccessible;
+            var leftOutOfServiceCollection = hasServiceCollectionMethod
+                && trigger.SaveTriggerInterfaces.Count > 0
+                && !(trigger.IsAccessible && trigger.AreInterfacesAccessible);
+
+            if (leftOutOfOptionsBuilder || leftOutOfServiceCollection)
             {
                 context.ReportDiagnostic(Diagnostic.Create(
                     DiagnosticDescriptors.EFCT003_InaccessibleTrigger,
                     trigger.Location,
-                    trigger.FullName.Substring("global::".Length)));
+                    trigger.FullName.Substring("global::".Length),
+                    hasOptionsBuilderMethod && !leftOutOfOptionsBuilder ? "the generated service collection registration" : "the generated registration"));
             }
         }
 
@@ -249,8 +262,8 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
         var source = new StringBuilder();
         source.AppendLine("// <auto-generated/>");
         source.AppendLine("#nullable enable");
-        // Naming an obsolete trigger warns in this file, where its author can't suppress it.
-        source.AppendLine("#pragma warning disable CS0612, CS0618");
+        // Naming a trigger marked obsolete or experimental is reported in this file, where its author can't suppress it.
+        source.AppendLine("#pragma warning disable");
 
         // Methods that share a containing type share one declaration of it, and one candidate list.
         foreach (var group in validMethods.GroupBy(method => method.Signature.ContainingType))

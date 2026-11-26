@@ -58,8 +58,9 @@ namespace EntityFrameworkCore.Triggered.Tests.Infrastructure
         [Fact]
         public void AddTrigger_TypeThatImplementsNoTriggerType_IsRejected()
         {
-            var exception = Assert.Throws<InvalidOperationException>(
-                () => CreateContext(triggerOptions => triggerOptions.AddTrigger(typeof(string), ServiceLifetime.Transient)));
+            using var context = CreateContext(triggerOptions => triggerOptions.AddTrigger(typeof(string), ServiceLifetime.Transient));
+
+            var exception = Assert.Throws<InvalidOperationException>(() => context.SaveChanges());
 
             Assert.Contains(typeof(string).FullName, exception.Message);
         }
@@ -67,8 +68,9 @@ namespace EntityFrameworkCore.Triggered.Tests.Infrastructure
         [Fact]
         public void AddTrigger_InstanceThatImplementsNoTriggerType_IsRejected()
         {
-            var exception = Assert.Throws<InvalidOperationException>(
-                () => CreateContext(triggerOptions => triggerOptions.AddTrigger(new Uri("https://example.com"))));
+            using var context = CreateContext(triggerOptions => triggerOptions.AddTrigger(new Uri("https://example.com")));
+
+            var exception = Assert.Throws<InvalidOperationException>(() => context.SaveChanges());
 
             Assert.Contains(typeof(Uri).FullName, exception.Message);
         }
@@ -76,8 +78,9 @@ namespace EntityFrameworkCore.Triggered.Tests.Infrastructure
         [Fact]
         public void AddTrigger_OpenGenericType_IsRejected()
         {
-            var exception = Assert.Throws<InvalidOperationException>(
-                () => CreateContext(triggerOptions => triggerOptions.AddTrigger(typeof(TriggerStub<>), ServiceLifetime.Transient)));
+            using var context = CreateContext(triggerOptions => triggerOptions.AddTrigger(typeof(TriggerStub<>), ServiceLifetime.Transient));
+
+            var exception = Assert.Throws<InvalidOperationException>(() => context.SaveChanges());
 
             Assert.Contains("open generic", exception.Message);
         }
@@ -89,7 +92,43 @@ namespace EntityFrameworkCore.Triggered.Tests.Infrastructure
             using var context = CreateContext(triggerOptions => triggerOptions
                 .AddTriggersFromAssembly(typeof(TriggersOptionExtensionTests).Assembly, ServiceLifetime.Scoped));
 
-            Assert.NotNull(context.Model);
+            Assert.Equal(0, context.SaveChanges());
+        }
+
+        [Fact]
+        public void AddTrigger_TypeThatImplementsNoTriggerType_IsRejectedByEveryContext()
+        {
+            using var first = CreateContext(triggerOptions => triggerOptions.AddTrigger(typeof(string), ServiceLifetime.Transient));
+            Assert.Throws<InvalidOperationException>(() => first.SaveChanges());
+
+            using var second = CreateContext(triggerOptions => triggerOptions.AddTrigger(typeof(string), ServiceLifetime.Transient));
+
+            Assert.Throws<InvalidOperationException>(() => second.SaveChanges());
+            Assert.Throws<InvalidOperationException>(() => second.SaveChanges());
+        }
+
+        class ContextThatAddsATriggerTypeInOnConfiguring : DbContext
+        {
+            public ContextThatAddsATriggerTypeInOnConfiguring(DbContextOptions<ContextThatAddsATriggerTypeInOnConfiguring> options)
+                : base(options)
+            {
+            }
+
+            protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+                => optionsBuilder.UseTriggers(triggerOptions => triggerOptions.AddTriggerType(typeof(ICustomTrigger)));
+        }
+
+        // EF builds services from the constructor's options before it calls OnConfiguring.
+        [Fact]
+        public void AddTrigger_WhenOnConfiguringAddsTheTriggerTypeItImplements_IsAccepted()
+        {
+            using var context = new ContextThatAddsATriggerTypeInOnConfiguring(new DbContextOptionsBuilder<ContextThatAddsATriggerTypeInOnConfiguring>()
+                .UseInMemoryDatabase(nameof(TriggersOptionExtensionTests))
+                .ConfigureWarnings(warnings => warnings.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning))
+                .UseTriggers(triggerOptions => triggerOptions.AddTrigger<CustomTrigger>())
+                .Options);
+
+            Assert.Equal(0, context.SaveChanges());
         }
 
         [Fact]
@@ -99,7 +138,7 @@ namespace EntityFrameworkCore.Triggered.Tests.Infrastructure
                 .AddTrigger<CustomTrigger>()
                 .AddTriggerType(typeof(ICustomTrigger)));
 
-            Assert.NotNull(context.Model);
+            Assert.Equal(0, context.SaveChanges());
         }
 
         [Fact]

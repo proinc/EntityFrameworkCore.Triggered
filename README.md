@@ -133,7 +133,7 @@ services.AddDbContext<ApplicationContext>(options => options.UseTriggers(trigger
 
 The method registers what `AddAssemblyTriggers` would: every concrete class in the project that implements a trigger interface the context uses. Classes are listed in ordinal order of their full names. The method can take an `IServiceCollection` in place of the `TriggersContextOptionsBuilder`, take a `ServiceLifetime` as a second parameter (triggers are scoped without one), and return `void`. A trigger class that generated code can't reach, such as a private nested class, is left out and reported as warning `EFCT003`. A class is only listed when it implements one of the library's own trigger interfaces, so one that implements nothing but a custom trigger type added with `AddTriggerType` needs `AddTrigger`.
 
-A class registered with `AddTrigger` has to implement a trigger interface. One that doesn't is rejected with an `InvalidOperationException` when the context is created.
+A class registered with `AddTrigger` has to implement a trigger interface. One that doesn't is rejected with an `InvalidOperationException` when the context saves changes.
 
 ### DbContext pooling
 When using EF Core's [DbContext pooling](https://docs.microsoft.com/en-us/ef/core/performance/advanced-performance-topics?tabs=with-constant#dbcontext-pooling), Triggers internally needs to discover the `IServiceProvider` that was used to obtain a lease on the current DbContext. Thankfully, all that's complexity is hidden and all that's required is a call to `AddTriggeredDbContextPool`.

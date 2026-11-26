@@ -113,7 +113,7 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
         private Registration[] _registrations = Array.Empty<Registration>();
         private Type[] _triggerTypes = _defaultTriggerTypes;
         private ResolvedTrigger[]? _resolvedTriggers;
-        private bool _validated;
+        private bool _triggersAreValid;
         private int _maxCascadeCycles = 100;
         private CascadeBehavior _cascadeBehavior = CascadeBehavior.EntityAndType;
         private Func<IServiceProvider, IServiceProvider>? _serviceProviderTransform;
@@ -157,7 +157,13 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
 
             services.AddScoped<TriggerService>();
             services.AddScoped<IResettableService>(serviceProvider => serviceProvider.GetRequiredService<TriggerService>());
-            services.TryAddScoped<ITriggerService>(serviceProvider => serviceProvider.GetRequiredService<TriggerService>());
+            // A context asks for the trigger service when it saves, and only from services built for its final
+            // options, so this is where a trigger that can't run is rejected.
+            services.TryAddScoped<ITriggerService>(serviceProvider => {
+                EnsureTriggersAreValid();
+
+                return serviceProvider.GetRequiredService<TriggerService>();
+            });
 
             services.AddScoped<TriggerFactory>();
 
@@ -179,7 +185,8 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
 
             foreach (var trigger in ResolveTriggers())
             {
-                if (trigger.Implementations.Length == 0)
+                // Neither kind can be registered. EnsureTriggersAreValid rejects them when the context saves.
+                if (trigger.Implementations.Length == 0 || trigger.Type.ContainsGenericParameters)
                 {
                     continue;
                 }
@@ -205,18 +212,20 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
             }
         }
 
-        // Checked here rather than in AddTrigger because a trigger can be added before the trigger type it implements,
-        // as when UseTransactionTriggers follows AddTrigger. Discoveries are skipped: they only contribute classes that
-        // are triggers, and reading an assembly is too slow for the setups where EF calls this for every context.
-        public void Validate(IDbContextOptions options)
+        // Triggers aren't checked here. EF calls this from the context's constructor, when OnConfiguring may still
+        // add the trigger type that a trigger implements.
+        public void Validate(IDbContextOptions options) { }
+
+        private void EnsureTriggersAreValid()
         {
-            if (_validated)
+            if (_triggersAreValid)
             {
                 return;
             }
 
             foreach (var registration in _registrations)
             {
+                // A discovery only contributes classes that are triggers.
                 if (registration.IsDiscovery)
                 {
                     continue;
@@ -238,7 +247,7 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
                 }
             }
 
-            _validated = true;
+            _triggersAreValid = true;
         }
 
         protected TriggersOptionExtension Clone() => new(this);

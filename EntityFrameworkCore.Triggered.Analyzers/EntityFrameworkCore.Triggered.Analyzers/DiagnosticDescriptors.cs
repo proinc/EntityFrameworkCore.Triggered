@@ -24,7 +24,7 @@ internal static class DiagnosticDescriptors
     public static readonly DiagnosticDescriptor EFCT003_InaccessibleTrigger = new(
         id: "EFCT003",
         title: "Trigger is left out of the generated registration",
-        messageFormat: "Trigger '{0}' is left out of the generated registration because generated code can't reach it or an entity type it handles. Make them internal or public, or register the trigger yourself.",
+        messageFormat: "Trigger '{0}' is left out of {1} because generated code can't reach it or an entity type it handles. Make them internal or public, or register the trigger yourself.",
         category: "Usage",
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true);

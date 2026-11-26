@@ -258,6 +258,7 @@ public class Startup
     [InlineData("public static partial IServiceCollection Register(TriggersContextOptionsBuilder builder);")]
     [InlineData("public static partial void Register<T>(TriggersContextOptionsBuilder builder);")]
     [InlineData("public static partial void Register(TriggersContextOptionsBuilder? builder);")]
+    [InlineData("public static partial ref TriggersContextOptionsBuilder Register(TriggersContextOptionsBuilder builder);")]
     public void MethodThatCannotBeGenerated_IsReported(string declaration)
     {
         var (_, diagnostics) = Generate(Triggers + @"
@@ -314,16 +315,19 @@ public static partial class Registration
     }
 
     [Fact]
-    public void TriggerThatIsAnErrorToUse_IsReportedAndLeftOut()
+    public void TriggerInATypeThatIsAnErrorToUse_IsReportedAndLeftOut()
     {
         var (output, diagnostics) = Generate(OptionsBuilderRegistration + @"
 [System.Obsolete(""Gone"", true)]
-public class Gone : IBeforeSaveTrigger<Entity>
+public class Gone
 {
-    public void BeforeSave(ITriggerContext<Entity> context) { }
+    public class Inner : IBeforeSaveTrigger<Entity>
+    {
+        public void BeforeSave(ITriggerContext<Entity> context) { }
+    }
 }");
 
-        AssertReportedAndLeftOut(output, diagnostics, "Gone");
+        AssertReportedAndLeftOut(output, diagnostics, "Gone.Inner");
     }
 
     [Fact]
@@ -356,13 +360,60 @@ public static partial class Registration<T,U>
     }
 
     [Fact]
-    public void ObsoleteTrigger_IsRegisteredWithoutWarnings()
+    public void WithBothKindsOfMethod_TriggerOnAnEntityGeneratedCodeCannotReach_IsLeftOutOfTheServiceCollectionOnly()
+    {
+        var (output, diagnostics) = Generate(OptionsBuilderRegistration + TriggerOnAPrivateEntity + @"
+public static partial class Services
+{
+    [GeneratedTriggerRegistration]
+    public static partial void Register(IServiceCollection services);
+}");
+
+        AssertReportedAndLeftOut(output, diagnostics, "Container.RowTrigger' is left out of the generated service collection registration");
+    }
+
+    // A service collection has nothing to register for a transaction trigger, reachable or not.
+    [Fact]
+    public void OnServiceCollection_TransactionTriggerGeneratedCodeCannotReach_IsNotReported()
+    {
+        var (_, diagnostics) = Generate(Triggers + @"
+public class Container
+{
+    private class HiddenCommit : IBeforeCommitTrigger<Entity>
+    {
+        public void BeforeCommit(ITriggerContext<Entity> context) { }
+    }
+}
+
+public static partial class Registration
+{
+    [GeneratedTriggerRegistration]
+    public static partial void Register(IServiceCollection services);
+}");
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void ObsoleteOrExperimentalTrigger_IsRegisteredWithoutWarnings()
     {
         var registration = Compile(Triggers + @"
 namespace App.Triggers
 {
     [System.Obsolete(""Replaced by Beta"")]
     public class Deprecated : IBeforeSaveTrigger<Entity>
+    {
+        public void BeforeSave(ITriggerContext<Entity> context) { }
+    }
+
+    [System.Obsolete(""Replaced by Beta"", DiagnosticId = ""APP001"")]
+    public class DeprecatedWithAnId : IBeforeSaveTrigger<Entity>
+    {
+        public void BeforeSave(ITriggerContext<Entity> context) { }
+    }
+
+    [System.Diagnostics.CodeAnalysis.Experimental(""APP002"")]
+    public class Trial : IBeforeSaveTrigger<Entity>
     {
         public void BeforeSave(ITriggerContext<Entity> context) { }
     }
@@ -377,7 +428,10 @@ public static partial class Registration
     public static partial void Register(IServiceCollection services);
 }", "Registration", "event");
 
-        Assert.Contains("App.Triggers.Deprecated", RegisteredTriggers(registration).Select(trigger => trigger.Type));
+        var triggers = RegisteredTriggers(registration).Select(trigger => trigger.Type);
+        Assert.Contains("App.Triggers.Deprecated", triggers);
+        Assert.Contains("App.Triggers.DeprecatedWithAnId", triggers);
+        Assert.Contains("App.Triggers.Trial", triggers);
     }
 
     [Fact]
