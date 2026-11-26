@@ -369,7 +369,10 @@ public class Gone
     public void MethodsInPartsOfOneType_ShareItsCandidateList()
     {
         var (output, diagnostics) = Generate(Triggers + @"
-public static partial class Registration<T, U>
+[System.AttributeUsage(System.AttributeTargets.GenericParameter)]
+public class MarkAttribute : System.Attribute { }
+
+public static partial class Registration<[Mark] T, U>
 {
     [GeneratedTriggerRegistration]
     public static partial void First(TriggersContextOptionsBuilder builder);

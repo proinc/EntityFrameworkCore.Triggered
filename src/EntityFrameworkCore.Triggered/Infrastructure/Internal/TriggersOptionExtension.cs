@@ -165,7 +165,8 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
 
             // A trigger that can't run is rejected here and not in Validate, which EF calls from the context's
             // constructor, when OnConfiguring may still add the trigger type the trigger implements. A context asks
-            // for the trigger service when it saves, and only from the services built for its final options.
+            // for the trigger service when it saves, and only from the services built for its final options. One
+            // that replaces the service, or never saves, isn't told.
             services.TryAddScoped<ITriggerService>(serviceProvider => triggerThatCannotRun is null
                 ? serviceProvider.GetRequiredService<TriggerService>()
                 : throw CreateRejection(triggerThatCannotRun));

@@ -95,7 +95,12 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
                     ? $"{record.Keyword.Text} {record.ClassOrStructKeyword.Text}".TrimEnd()
                     : type.Keyword.Text;
 
-                return $"partial {keyword} {type.Identifier.Text}{type.TypeParameterList}";
+                // Names and variance only. An attribute on a type parameter can't be repeated on another part.
+                var typeParameters = type.TypeParameterList is { } list
+                    ? $"<{string.Join(", ", list.Parameters.Select(parameter => $"{parameter.VarianceKeyword.Text} {parameter.Identifier.Text}".TrimStart()))}>"
+                    : "";
+
+                return $"partial {keyword} {type.Identifier.Text}{typeParameters}";
             })
             .ToImmutableArray();
 
@@ -136,7 +141,7 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
         }
 
         Visit(compilation.Assembly.GlobalNamespace);
-        triggers.Sort(static (left, right) => string.CompareOrdinal(left.FullName, right.FullName));
+        triggers.Sort(static (left, right) => string.CompareOrdinal(left.SortName, right.SortName));
 
         return new EquatableArray<TriggerClass>(triggers.ToImmutable());
     }
@@ -234,7 +239,11 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
         {
             if (method.Location is not null)
             {
-                context.ReportDiagnostic(Diagnostic.Create(DiagnosticDescriptors.EFCT002_InvalidRegistrationMethod, method.Location, method.Name));
+                context.ReportDiagnostic(Diagnostic.Create(
+                    DiagnosticDescriptors.EFCT002_InvalidRegistrationMethod,
+                    method.Location,
+                    // A lambda can carry the attribute too, and has no name.
+                    method.Name.Length > 0 ? $"'{method.Name}'" : "A lambda"));
             }
         }
 
@@ -400,5 +409,9 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
         EquatableArray<string> SaveTriggerInterfaces,
         bool IsAccessible,
         bool AreInterfacesAccessible,
-        Location? Location);
+        Location? Location)
+    {
+        // The name as metadata has it. FullName escapes a keyword with an @, which would sort it first.
+        public string SortName => FullName.Replace("@", "");
+    }
 }
