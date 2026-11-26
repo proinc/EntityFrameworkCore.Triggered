@@ -146,6 +146,13 @@ namespace EntityFrameworkCore.Triggered.Tests.Infrastructure
         }
 
         [Fact]
+        public void AddTriggerCandidates_NullCandidate_IsRejected()
+        {
+            Assert.Throws<InvalidOperationException>(
+                () => CreateContext(triggerOptions => triggerOptions.AddTriggerCandidates(new Type[] { null }, ServiceLifetime.Scoped)));
+        }
+
+        [Fact]
         public void OptionsBuiltTheSameWayTwice_ShareAServiceProvider()
         {
             static void Configure(TriggersContextOptionsBuilder triggerOptions) => triggerOptions

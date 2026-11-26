@@ -245,6 +245,12 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
                 {
                     foreach (var type in registration.GetDiscoveredTypes())
                     {
+                        // Checked here, once per set of services, to keep AddTriggerCandidates from walking the array.
+                        if (type is null)
+                        {
+                            throw new InvalidOperationException("The candidates passed to AddTriggerCandidates can't include null.");
+                        }
+
                         // An open generic class can't be created, so it isn't a trigger until someone closes it.
                         if (type.IsClass
                             && !type.IsAbstract
@@ -382,11 +388,6 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
             if (candidates == null)
             {
                 throw new ArgumentNullException(nameof(candidates));
-            }
-
-            if (Array.IndexOf(candidates, null) >= 0)
-            {
-                throw new ArgumentException("The candidates can't include null.", nameof(candidates));
             }
 
             return WithAdditionalRegistration(new Registration(candidates, lifetime, IsDiscovery: true));

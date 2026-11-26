@@ -39,7 +39,8 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             .Collect();
 
         // The package's analyzers reach every project that references it, so a project that marks no method
-        // shouldn't pay for looking through its classes.
+        // shouldn't pay for looking through its classes. One that does pays on each compilation either way: a
+        // syntax provider reruns its transform for every class too, and measured no faster.
         var triggers = methods
             .Combine(context.CompilationProvider)
             .Select(static (source, cancellationToken) => source.Left.Any(method => method.Signature is not null)
