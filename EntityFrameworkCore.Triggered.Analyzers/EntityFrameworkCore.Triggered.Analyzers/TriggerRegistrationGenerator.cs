@@ -173,25 +173,17 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
         }
 
         var isAccessible = CanName(type, compilation);
+        var canNameInterfacesToo = isAccessible && areInterfacesAccessible;
 
         return new TriggerClass(
             FullName(type),
             new EquatableArray<string>(saveTriggerInterfaces?.ToImmutable() ?? ImmutableArray<string>.Empty),
             isAccessible,
-            isAccessible && areInterfacesAccessible,
-            isAccessible && areInterfacesAccessible ? null : type.Locations.FirstOrDefault(location => location.IsInSource) ?? Location.None);
+            canNameInterfacesToo,
+            canNameInterfacesToo ? null : type.Locations.FirstOrDefault(location => location.IsInSource) ?? Location.None);
     }
 
     private static string FullName(ITypeSymbol type) => type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-
-    // The type itself, then each type it's nested in.
-    private static IEnumerable<INamedTypeSymbol> ContainingTypes(INamedTypeSymbol type)
-    {
-        for (INamedTypeSymbol? current = type; current is not null; current = current.ContainingType)
-        {
-            yield return current;
-        }
-    }
 
     private static bool IsObsoleteError(INamedTypeSymbol type)
         => type.GetAttributes().Any(attribute =>
@@ -213,11 +205,21 @@ public sealed class TriggerRegistrationGenerator : IIncrementalGenerator
             return true;
         }
 
-        return compilation.IsSymbolAccessibleWithin(named, compilation.Assembly)
-            && ContainingTypes(named).All(current =>
-                !current.IsFileLocal
-                && !IsObsoleteError(current)
-                && current.TypeArguments.All(argument => CanName(argument, compilation)));
+        if (!compilation.IsSymbolAccessibleWithin(named, compilation.Assembly))
+        {
+            return false;
+        }
+
+        // The rest holds for the type and for each type it's nested in.
+        for (INamedTypeSymbol? current = named; current is not null; current = current.ContainingType)
+        {
+            if (current.IsFileLocal || IsObsoleteError(current) || !current.TypeArguments.All(argument => CanName(argument, compilation)))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static void Generate(SourceProductionContext context, ImmutableArray<RegistrationMethod> methods, EquatableArray<TriggerClass> triggers)

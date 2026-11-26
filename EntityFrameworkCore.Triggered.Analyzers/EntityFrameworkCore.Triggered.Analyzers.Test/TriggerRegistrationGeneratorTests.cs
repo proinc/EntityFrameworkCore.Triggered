@@ -242,8 +242,7 @@ public static partial class Registration
     public static partial void Register(TriggersContextOptionsBuilder builder) { }
 }");
 
-        var diagnostic = Assert.Single(diagnostics);
-        Assert.Equal("EFCT002", diagnostic.Id);
+        AssertRejected(diagnostics);
     }
 
     [Fact]
@@ -261,8 +260,7 @@ public static class Registration
     }
 }");
 
-        var diagnostic = Assert.Single(diagnostics);
-        Assert.Equal("EFCT002", diagnostic.Id);
+        AssertRejected(diagnostics);
     }
 
     [Theory]
@@ -277,8 +275,7 @@ public static class Registration
     internal static partial void Register(TriggersContextOptionsBuilder builder);
 " + close);
 
-        var diagnostic = Assert.Single(diagnostics);
-        Assert.Equal("EFCT002", diagnostic.Id);
+        AssertRejected(diagnostics);
     }
 
     [Theory]
@@ -299,9 +296,11 @@ public partial class Registration
     " + declaration + @"
 }");
 
-        var diagnostic = Assert.Single(diagnostics);
-        Assert.Equal("EFCT002", diagnostic.Id);
+        AssertRejected(diagnostics);
     }
+
+    private static void AssertRejected(ImmutableArray<Diagnostic> diagnostics)
+        => Assert.Equal("EFCT002", Assert.Single(diagnostics).Id);
 
     private static void AssertReportedAndLeftOut(Compilation output, ImmutableArray<Diagnostic> diagnostics, string trigger)
     {
