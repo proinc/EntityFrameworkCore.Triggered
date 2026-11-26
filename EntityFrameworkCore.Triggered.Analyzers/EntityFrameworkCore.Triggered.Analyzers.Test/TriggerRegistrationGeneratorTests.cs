@@ -89,7 +89,11 @@ public static partial class Registration
             $"Generated{Guid.NewGuid():N}",
             new[] { CSharpSyntaxTree.ParseText(source) },
             References,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            // MSBuild turns the assembly version unification warnings off for every project too.
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithSpecificDiagnosticOptions(new Dictionary<string, ReportDiagnostic> {
+                ["CS1701"] = ReportDiagnostic.Suppress,
+                ["CS1702"] = ReportDiagnostic.Suppress
+            }));
 
         CSharpGeneratorDriver
             .Create(new TriggerRegistrationGenerator())
