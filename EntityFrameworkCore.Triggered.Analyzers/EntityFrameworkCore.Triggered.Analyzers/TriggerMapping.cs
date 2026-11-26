@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -130,9 +131,33 @@ internal static class TriggerMapping
     private static readonly ImmutableDictionary<string, TriggerMappingEntry> EntriesBySyncInterface =
         Entries.ToImmutableDictionary(entry => entry.SyncInterfaceMetadataName);
 
+    private const string TransactionsNamespace = "EntityFrameworkCore.Triggered.Transactions.";
+
+    /// <summary>The interfaces <c>UseTriggers</c> registers, sync and async.</summary>
+    public static readonly ImmutableHashSet<string> SaveTriggerInterfaces = InterfaceMetadataNames(transactions: false);
+
+    /// <summary>The interfaces <c>UseTransactionTriggers</c> registers, sync and async.</summary>
+    public static readonly ImmutableHashSet<string> TransactionTriggerInterfaces = InterfaceMetadataNames(transactions: true);
+
+    private static readonly ImmutableHashSet<string> InterfaceShortNames = Entries
+        .SelectMany(entry => new[] { entry.SyncInterfaceShortName, entry.AsyncInterfaceShortName })
+        .ToImmutableHashSet();
+
+    private static ImmutableHashSet<string> InterfaceMetadataNames(bool transactions)
+        => Entries
+            .SelectMany(entry => new[] { entry.SyncInterfaceMetadataName, entry.AsyncInterfaceMetadataName })
+            .Where(name => name.StartsWith(TransactionsNamespace, StringComparison.Ordinal) == transactions)
+            .ToImmutableHashSet();
+
     public static bool TryGetBySyncInterface(INamedTypeSymbol triggerInterface, out TriggerMappingEntry entry)
+        => EntriesBySyncInterface.TryGetValue(MetadataName(triggerInterface), out entry);
+
+    /// <summary>A cheap way to rule an interface out before building its <see cref="MetadataName" />.</summary>
+    public static bool HasTriggerInterfaceName(INamedTypeSymbol @interface) => InterfaceShortNames.Contains(@interface.Name);
+
+    public static string MetadataName(INamedTypeSymbol @interface)
     {
-        var definition = triggerInterface.OriginalDefinition;
-        return EntriesBySyncInterface.TryGetValue(definition.ContainingNamespace.ToDisplayString() + "." + definition.MetadataName, out entry);
+        var definition = @interface.OriginalDefinition;
+        return definition.ContainingNamespace.ToDisplayString() + "." + definition.MetadataName;
     }
 }

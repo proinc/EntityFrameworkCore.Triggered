@@ -27,6 +27,8 @@
     <ItemGroup>
         <ProjectReference Include="..\EntityFrameworkCore.Triggered.Analyzers\EntityFrameworkCore.Triggered.Analyzers.csproj" />
         <ProjectReference Include="..\EntityFrameworkCore.Triggered.Analyzers.CodeFixes\EntityFrameworkCore.Triggered.Analyzers.CodeFixes.csproj" />
+        <!-- The generator tests compile against the real library and run what was generated. -->
+        <ProjectReference Include="..\..\src\EntityFrameworkCore.Triggered.Transactions\EntityFrameworkCore.Triggered.Transactions.csproj" />
     </ItemGroup>
 
 </Project>

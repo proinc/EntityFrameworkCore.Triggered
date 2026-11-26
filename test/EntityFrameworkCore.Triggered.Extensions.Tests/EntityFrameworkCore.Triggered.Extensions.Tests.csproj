@@ -7,6 +7,10 @@
     <ItemGroup>
         <ProjectReference
             Include="..\..\src\EntityFrameworkCore.Triggered.Extensions\EntityFrameworkCore.Triggered.Extensions.csproj" />
+        <!-- Runs the trigger registration generator on this project, as the Abstractions package does for a consumer. -->
+        <ProjectReference
+            Include="..\..\EntityFrameworkCore.Triggered.Analyzers\EntityFrameworkCore.Triggered.Analyzers\EntityFrameworkCore.Triggered.Analyzers.csproj"
+            OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     </ItemGroup>
 
 </Project>

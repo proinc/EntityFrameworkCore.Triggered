@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Reflection;
 using EntityFrameworkCore.Triggered.Internal;
 using EntityFrameworkCore.Triggered.Internal.CascadeStrategies;
 using EntityFrameworkCore.Triggered.Lifecycles;
@@ -17,8 +18,13 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
         sealed class ExtensionInfo : DbContextOptionsExtensionInfo
         {
             private string? _logFragment;
-            public ExtensionInfo(IDbContextOptionsExtension extension) : base(extension)
+            private readonly int _serviceProviderHash;
+
+            public ExtensionInfo(TriggersOptionExtension extension) : base(extension)
             {
+                // EF asks for the hash for every context it constructs. The extension no longer changes once it
+                // hands out its info, so the hash is worked out once.
+                _serviceProviderHash = extension.ComputeServiceProviderHashCode();
             }
 
             public override bool IsDatabaseProvider => false;
@@ -44,90 +50,84 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
                     throw new ArgumentNullException(nameof(debugInfo));
                 }
 
-                debugInfo["Triggers:TriggersCount"] = (Extension._triggers?.Count() ?? 0).ToString();
-                debugInfo["Triggers:TriggerTypesCount"] = (Extension._triggerTypes?.Count() ?? 0).ToString();
+                debugInfo["Triggers:TriggersCount"] = Extension.ResolveTriggers().Length.ToString();
+                debugInfo["Triggers:TriggerTypesCount"] = Extension._triggerTypes.Length.ToString();
                 debugInfo["Triggers:MaxCascadeCycles"] = Extension._maxCascadeCycles.ToString();
                 debugInfo["Triggers:CascadeBehavior"] = Extension._cascadeBehavior.ToString();
             }
 
-            public override int GetServiceProviderHashCode()
-            {
-                var hashCode = new HashCode();
-
-                if (Extension._triggers != null)
-                {
-                    foreach (var trigger in Extension._triggers)
-                    {
-                        hashCode.Add(trigger);
-                    }
-                }
-
-                if (Extension._triggerTypes != null)
-                {
-                    foreach (var triggerType in Extension._triggerTypes)
-                    {
-                        hashCode.Add(triggerType);
-                    }
-                }
-
-                hashCode.Add(Extension._maxCascadeCycles);
-                hashCode.Add(Extension._cascadeBehavior);
-
-                if (Extension._serviceProviderTransform != null)
-                {
-                    hashCode.Add(Extension._serviceProviderTransform);
-                }
-
-                return hashCode.ToHashCode();
-            }
+            public override int GetServiceProviderHashCode() => _serviceProviderHash;
 
             public override bool ShouldUseSameServiceProvider(DbContextOptionsExtensionInfo other)
                 => other is ExtensionInfo otherInfo
-                    && Enumerable.SequenceEqual(Extension._triggers ?? Enumerable.Empty<ValueTuple<object, ServiceLifetime>>(), otherInfo.Extension._triggers ?? Enumerable.Empty<ValueTuple<object, ServiceLifetime>>())
-                    && Enumerable.SequenceEqual(Extension._triggerTypes ?? Enumerable.Empty<Type>(), otherInfo.Extension._triggerTypes ?? Enumerable.Empty<Type>())
-                    && Extension._maxCascadeCycles == otherInfo.Extension._maxCascadeCycles
-                    && Extension._cascadeBehavior == otherInfo.Extension._cascadeBehavior
-                    && Extension._serviceProviderTransform == otherInfo.Extension._serviceProviderTransform;
+                    && (ReferenceEquals(Extension, otherInfo.Extension) || Extension.RegistersSameServicesAs(otherInfo.Extension));
         }
 
+        // One entry of the trigger list. A trigger is a type or an instance, and has to implement a trigger type.
+        // A discovery is an assembly or an array of classes, and contributes the classes that do.
+        private readonly record struct Registration(object Source, ServiceLifetime Lifetime, bool IsDiscovery)
+        {
+            public Type TriggerType => Source as Type ?? Source.GetType();
+            public object? TriggerInstance => Source is Type ? null : Source;
+            public IEnumerable<Type> GetDiscoveredTypes() => Source as Type[] ?? ((Assembly)Source).GetTypes();
+
+            // Arrays compare by content, so a caller that builds a new array for each set of options still shares
+            // a service provider.
+            public bool Equals(Registration other)
+                => Lifetime == other.Lifetime
+                    && IsDiscovery == other.IsDiscovery
+                    && (Source is Type[] types
+                        ? other.Source is Type[] otherTypes && (ReferenceEquals(types, otherTypes) || types.SequenceEqual(otherTypes))
+                        : Source.Equals(other.Source));
+
+            // An array hashes by its length, which agrees with Equals and saves walking it for each new set of options.
+            public override int GetHashCode()
+                => HashCode.Combine(Lifetime, IsDiscovery, Source is Type[] types ? types.Length : Source.GetHashCode());
+        }
+
+        private sealed record ResolvedTrigger(Type Type, object? Instance, ServiceLifetime Lifetime, Type[] Implementations)
+        {
+            // Discovery only finds triggers that can, so one that can't was added with AddTrigger.
+            public bool CanRun => Implementations.Length > 0 && !Type.ContainsGenericParameters;
+        }
+
+        private static readonly Type[] _defaultTriggerTypes = new[] {
+            typeof(IBeforeSaveTrigger<>),
+            typeof(IBeforeSaveAsyncTrigger<>),
+            typeof(IAfterSaveTrigger<>),
+            typeof(IAfterSaveAsyncTrigger<>),
+            typeof(IAfterSaveFailedTrigger<>),
+            typeof(IAfterSaveFailedAsyncTrigger<>),
+            typeof(IBeforeSaveStartingTrigger),
+            typeof(IBeforeSaveStartingAsyncTrigger),
+            typeof(IBeforeSaveCompletedTrigger),
+            typeof(IBeforeSaveCompletedAsyncTrigger),
+            typeof(IAfterSaveFailedStartingTrigger),
+            typeof(IAfterSaveFailedStartingAsyncTrigger),
+            typeof(IAfterSaveFailedCompletedTrigger),
+            typeof(IAfterSaveFailedCompletedAsyncTrigger),
+            typeof(IAfterSaveStartingTrigger),
+            typeof(IAfterSaveStartingAsyncTrigger),
+            typeof(IAfterSaveCompletedTrigger),
+            typeof(IAfterSaveCompletedAsyncTrigger)
+        };
+
         private ExtensionInfo? _info;
-        private IEnumerable<(object typeOrInstance, ServiceLifetime lifetime)>? _triggers;
-        private IEnumerable<Type> _triggerTypes;
+        // Arrays are replaced, never changed, so clones can share them.
+        private Registration[] _registrations = Array.Empty<Registration>();
+        private Type[] _triggerTypes = _defaultTriggerTypes;
+        private ResolvedTrigger[]? _resolvedTriggers;
         private int _maxCascadeCycles = 100;
         private CascadeBehavior _cascadeBehavior = CascadeBehavior.EntityAndType;
         private Func<IServiceProvider, IServiceProvider>? _serviceProviderTransform;
 
         public TriggersOptionExtension()
         {
-            _triggerTypes = new[] {
-                typeof(IBeforeSaveTrigger<>),
-                typeof(IBeforeSaveAsyncTrigger<>),
-                typeof(IAfterSaveTrigger<>),
-                typeof(IAfterSaveAsyncTrigger<>),
-                typeof(IAfterSaveFailedTrigger<>),
-                typeof(IAfterSaveFailedAsyncTrigger<>),
-                typeof(IBeforeSaveStartingTrigger),
-                typeof(IBeforeSaveStartingAsyncTrigger),
-                typeof(IBeforeSaveCompletedTrigger),
-                typeof(IBeforeSaveCompletedAsyncTrigger),
-                typeof(IAfterSaveFailedStartingTrigger),
-                typeof(IAfterSaveFailedStartingAsyncTrigger),
-                typeof(IAfterSaveFailedCompletedTrigger),
-                typeof(IAfterSaveFailedCompletedAsyncTrigger),
-                typeof(IAfterSaveStartingTrigger),
-                typeof(IAfterSaveStartingAsyncTrigger),
-                typeof(IAfterSaveCompletedTrigger),
-                typeof(IAfterSaveCompletedAsyncTrigger)
-            };
         }
 
         public TriggersOptionExtension(TriggersOptionExtension copyFrom)
         {
-            if (copyFrom._triggers != null)
-            {
-                _triggers = copyFrom._triggers;
-            }
-
+            _registrations = copyFrom._registrations;
             _triggerTypes = copyFrom._triggerTypes;
             _maxCascadeCycles = copyFrom._maxCascadeCycles;
             _cascadeBehavior = copyFrom._cascadeBehavior;
@@ -139,7 +139,12 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
 
         public int MaxCascadeCycles => _maxCascadeCycles;
         public CascadeBehavior CascadeBehavior => _cascadeBehavior;
-        public IEnumerable<(object typeOrInstance, ServiceLifetime lifetime)> Triggers => _triggers ?? Enumerable.Empty<(object typeOrInstance, ServiceLifetime lifetime)>();
+
+        /// <summary>
+        /// The triggers these options register, with the triggers found in each added assembly in place of the assembly.
+        /// </summary>
+        public IEnumerable<(object typeOrInstance, ServiceLifetime lifetime)> Triggers
+            => ResolveTriggers().Select(trigger => (trigger.Instance ?? trigger.Type, trigger.Lifetime));
 
         public void ApplyServices(IServiceCollection services)
         {
@@ -155,7 +160,16 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
 
             services.AddScoped<TriggerService>();
             services.AddScoped<IResettableService>(serviceProvider => serviceProvider.GetRequiredService<TriggerService>());
-            services.TryAddScoped<ITriggerService>(serviceProvider => serviceProvider.GetRequiredService<TriggerService>());
+            var triggers = ResolveTriggers();
+            var triggerThatCannotRun = Array.Find(triggers, trigger => !trigger.CanRun);
+
+            // A trigger that can't run is rejected here and not in Validate, which EF calls from the context's
+            // constructor, when OnConfiguring may still add the trigger type the trigger implements. A context asks
+            // for the trigger service when it saves, and only from the services built for its final options. One
+            // that replaces the service, or never saves, isn't told.
+            services.TryAddScoped<ITriggerService>(serviceProvider => triggerThatCannotRun is null
+                ? serviceProvider.GetRequiredService<TriggerService>()
+                : throw CreateRejection(triggerThatCannotRun));
 
             services.AddScoped<TriggerFactory>();
 
@@ -175,69 +189,152 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
 
             services.TryAddTransient(typeof(ICascadeStrategy), cascadeStrategyType);
 
-            if (_triggers != null && _triggerTypes != null)
+            foreach (var trigger in triggers)
             {
-                foreach (var (typeOrInstance, lifetime) in _triggers)
+                if (!trigger.CanRun)
                 {
-                    var (triggerServiceType, triggerServiceInstance) = typeOrInstance switch {
-                        Type type => (type, null),
-                        object instance => (instance.GetType(), instance),
-                        _ => throw new InvalidOperationException("Unknown type registration")
-                    };
+                    continue;
+                }
 
-                    var instanceParamExpression = Expression.Parameter(typeof(object), "object");
+                var instanceParamExpression = Expression.Parameter(typeof(object), "object");
 
-                    Func<object?, object>? triggerInstanceFactoryBuilder = null;
+                var triggerInstanceFactoryBuilder =
+                    Expression.Lambda<Func<object?, object>>(
+                            Expression.New(
+                                typeof(TriggerInstanceFactory<>).MakeGenericType(trigger.Type).GetConstructor(new[] { typeof(object) })!,
+                                instanceParamExpression
+                            ),
+                            instanceParamExpression
+                    )
+                    .Compile();
 
-                    foreach (var triggerType in _triggerTypes.Distinct())
-                    {
-                        var triggerTypeImplementations = triggerType.IsGenericTypeDefinition
-                            ? TypeHelpers.FindGenericInterfaces(triggerServiceType, triggerType)
-                            : triggerServiceType.GetInterfaces().Where(x => x == triggerType);
-
-                        foreach (var triggerTypeImplementation in triggerTypeImplementations)
-                        {
-                            if (triggerInstanceFactoryBuilder is null)
-                            {
-                                triggerInstanceFactoryBuilder =
-                                    Expression.Lambda<Func<object?, object>>(
-                                            Expression.New(
-                                                typeof(TriggerInstanceFactory<>).MakeGenericType(triggerServiceType).GetConstructor(new[] { typeof(object) })!,
-                                                instanceParamExpression
-                                            ),
-                                            instanceParamExpression
-                                    )
-                                    .Compile();
-                            }
-
-                            var triggerTypeImplementationFactoryType = typeof(ITriggerInstanceFactory<>).MakeGenericType(triggerTypeImplementation);
-                            services.Add(new ServiceDescriptor(triggerTypeImplementationFactoryType, _ => triggerInstanceFactoryBuilder(triggerServiceInstance), lifetime));
-                            services.AddScoped(typeof(IResettableService), serviceProvider => serviceProvider.GetRequiredService(triggerTypeImplementationFactoryType));
-                        }
-                    }
+                foreach (var triggerTypeImplementation in trigger.Implementations)
+                {
+                    var triggerTypeImplementationFactoryType = typeof(ITriggerInstanceFactory<>).MakeGenericType(triggerTypeImplementation);
+                    services.Add(new ServiceDescriptor(triggerTypeImplementationFactoryType, _ => triggerInstanceFactoryBuilder(trigger.Instance), trigger.Lifetime));
+                    services.AddScoped(typeof(IResettableService), serviceProvider => serviceProvider.GetRequiredService(triggerTypeImplementationFactoryType));
                 }
             }
         }
 
         public void Validate(IDbContextOptions options) { }
 
+        private static InvalidOperationException CreateRejection(ResolvedTrigger trigger)
+            => trigger.Type.ContainsGenericParameters
+                ? new InvalidOperationException(
+                    $"'{trigger.Type}' was added as a trigger but is an open generic type, which can't be created. "
+                    + "Add it with its type arguments, such as typeof(SoftDelete<User>).")
+                : new InvalidOperationException(
+                    $"'{trigger.Type}' was added as a trigger but implements none of the registered trigger types. "
+                    + "A trigger implements an interface such as IBeforeSaveTrigger<TEntity>, or one added with AddTriggerType. "
+                    + "UseTransactionTriggers adds the transaction trigger types.");
+
         protected TriggersOptionExtension Clone() => new(this);
 
-        private bool TypeIsValidTrigger(Type type)
+        private ResolvedTrigger[] ResolveTriggers()
         {
-            if (TypeHelpers.FindGenericInterfaces(type, typeof(IBeforeSaveTrigger<>)) != null || TypeHelpers.FindGenericInterfaces(type, typeof(IAfterSaveTrigger<>)) != null)
+            if (_resolvedTriggers is not null)
             {
-                return true;
+                return _resolvedTriggers;
             }
-            else if (_triggerTypes != null)
+
+            var triggers = new List<ResolvedTrigger>();
+
+            foreach (var registration in _registrations)
             {
-                return _triggerTypes.Any(triggerType => TypeHelpers.FindGenericInterfaces(type, triggerType) != null);
+                if (registration.IsDiscovery)
+                {
+                    foreach (var type in registration.GetDiscoveredTypes())
+                    {
+                        // Checked here, once per set of services, to keep AddTriggerCandidates from walking the array.
+                        if (type is null)
+                        {
+                            throw new InvalidOperationException("The candidates passed to AddTriggerCandidates can't include null.");
+                        }
+
+                        // An open generic class can't be created, so it isn't a trigger until someone closes it.
+                        if (type.IsClass
+                            && !type.IsAbstract
+                            && !type.ContainsGenericParameters
+                            && FindTriggerImplementations(type) is { Length: > 0 } implementations)
+                        {
+                            triggers.Add(new ResolvedTrigger(type, null, registration.Lifetime, implementations));
+                        }
+                    }
+                }
+                else
+                {
+                    triggers.Add(new ResolvedTrigger(
+                        registration.TriggerType,
+                        registration.TriggerInstance,
+                        registration.Lifetime,
+                        FindTriggerImplementations(registration.TriggerType)));
+                }
             }
-            else
-            {
-                return false;
-            }
+
+            return _resolvedTriggers = triggers.ToArray();
         }
+
+        // The interfaces of the type that are trigger types, grouped by trigger type in the order those were registered.
+        private Type[] FindTriggerImplementations(Type type)
+        {
+            var interfaces = type.GetInterfaces();
+            if (interfaces.Length == 0)
+            {
+                return Array.Empty<Type>();
+            }
+
+            var implementations = new List<Type>();
+
+            foreach (var triggerType in _triggerTypes)
+            {
+                foreach (var @interface in interfaces)
+                {
+                    var implementsTriggerType = triggerType.IsGenericTypeDefinition
+                        ? @interface.IsGenericType && @interface.GetGenericTypeDefinition() == triggerType
+                        : @interface == triggerType;
+
+                    if (implementsTriggerType)
+                    {
+                        implementations.Add(@interface);
+                    }
+                }
+            }
+
+            return implementations.ToArray();
+        }
+
+        private int ComputeServiceProviderHashCode()
+        {
+            var hashCode = new HashCode();
+
+            foreach (var registration in _registrations)
+            {
+                hashCode.Add(registration);
+            }
+
+            foreach (var triggerType in _triggerTypes)
+            {
+                hashCode.Add(triggerType);
+            }
+
+            hashCode.Add(_maxCascadeCycles);
+            hashCode.Add(_cascadeBehavior);
+
+            if (_serviceProviderTransform != null)
+            {
+                hashCode.Add(_serviceProviderTransform);
+            }
+
+            return hashCode.ToHashCode();
+        }
+
+        private bool RegistersSameServicesAs(TriggersOptionExtension other)
+            => _registrations.SequenceEqual(other._registrations)
+                && _triggerTypes.SequenceEqual(other._triggerTypes)
+                && _maxCascadeCycles == other._maxCascadeCycles
+                && _cascadeBehavior == other._cascadeBehavior
+                && _serviceProviderTransform == other._serviceProviderTransform;
 
         public TriggersOptionExtension WithCascadeBehavior(CascadeBehavior cascadeBehavior)
         {
@@ -259,25 +356,12 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
 
         public TriggersOptionExtension WithAdditionalTrigger(Type triggerType, ServiceLifetime lifetime)
         {
-            if (!TypeIsValidTrigger(triggerType))
+            if (triggerType == null)
             {
-                throw new ArgumentException("A trigger needs to implement either or both IBeforeSaveChangeTrigger or IAfterSaveChangeTriggerHandler", nameof(triggerType));
+                throw new ArgumentNullException(nameof(triggerType));
             }
 
-            var clone = Clone();
-            var triggerEnumerable = Enumerable.Repeat(((object)triggerType, lifetime), 1);
-
-            if (clone._triggers == null)
-            {
-                clone._triggers = triggerEnumerable;
-            }
-            else
-            {
-                clone._triggers = clone._triggers.Concat(triggerEnumerable);
-            }
-
-
-            return clone;
+            return WithAdditionalRegistration(new Registration(triggerType, lifetime, IsDiscovery: false));
         }
 
         public TriggersOptionExtension WithAdditionalTrigger(object instance)
@@ -287,23 +371,33 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
                 throw new ArgumentNullException(nameof(instance));
             }
 
-            if (!TypeIsValidTrigger(instance.GetType()))
+            return WithAdditionalRegistration(new Registration(instance, ServiceLifetime.Singleton, IsDiscovery: false));
+        }
+
+        public TriggersOptionExtension WithAdditionalTriggerAssembly(Assembly assembly, ServiceLifetime lifetime)
+        {
+            if (assembly == null)
             {
-                throw new ArgumentException("A trigger needs to implement either or both IBeforeSaveChangeTrigger or IAfterSaveChangeTriggerHandler", nameof(instance));
+                throw new ArgumentNullException(nameof(assembly));
             }
 
+            return WithAdditionalRegistration(new Registration(assembly, lifetime, IsDiscovery: true));
+        }
+
+        public TriggersOptionExtension WithAdditionalTriggerCandidates(Type[] candidates, ServiceLifetime lifetime)
+        {
+            if (candidates == null)
+            {
+                throw new ArgumentNullException(nameof(candidates));
+            }
+
+            return WithAdditionalRegistration(new Registration(candidates, lifetime, IsDiscovery: true));
+        }
+
+        private TriggersOptionExtension WithAdditionalRegistration(Registration registration)
+        {
             var clone = Clone();
-            var triggersEnumerable = Enumerable.Repeat((instance, ServiceLifetime.Singleton), 1);
-
-            if (clone._triggers == null)
-            {
-                clone._triggers = triggersEnumerable;
-            }
-            else
-            {
-                clone._triggers = clone._triggers.Concat(triggersEnumerable);
-            }
-
+            clone._registrations = [.. _registrations, registration];
 
             return clone;
         }
@@ -315,19 +409,14 @@ namespace EntityFrameworkCore.Triggered.Infrastructure.Internal
                 throw new ArgumentNullException(nameof(triggerType));
             }
 
+            // Kept distinct, since a trigger type listed twice would register each of its triggers twice.
+            if (_triggerTypes.Contains(triggerType))
+            {
+                return this;
+            }
 
             var clone = Clone();
-            var triggerTypesEnumerable = Enumerable.Repeat(triggerType, 1);
-
-            if (clone._triggerTypes == null)
-            {
-                clone._triggerTypes = triggerTypesEnumerable;
-            }
-            else
-            {
-                clone._triggerTypes = clone._triggerTypes.Concat(triggerTypesEnumerable);
-            }
-
+            clone._triggerTypes = [.. _triggerTypes, triggerType];
 
             return clone;
         }
